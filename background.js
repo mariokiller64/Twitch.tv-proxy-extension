@@ -159,6 +159,40 @@ function checkRateLimit(domain) {
     return true;
 }
 
+// Helper function to safely send messages
+async function safeSendMessage(message) {
+    try {
+        // Check if there are any receivers (popup) open
+        const receivers = await chrome.runtime.getContexts({
+            contextTypes: ['POPUP']
+        });
+        
+        if (receivers && receivers.length > 0) {
+            chrome.runtime.sendMessage(message);
+        } else {
+            // Store the last status in storage for the popup to read when it opens
+            if (message.type === 'proxyStatus') {
+                chrome.storage.sync.set({
+                    lastProxyStatus: {
+                        ip: message.ip,
+                        matched: message.matched,
+                        timestamp: Date.now()
+                    }
+                });
+            } else if (message.type === 'proxyError') {
+                chrome.storage.sync.set({
+                    lastProxyError: {
+                        message: message.message,
+                        timestamp: Date.now()
+                    }
+                });
+            }
+        }
+    } catch (error) {
+        console.log('Message sending skipped - no receivers');
+    }
+}
+
 async function setProxy(details, enabled, preferHttps = true, useSocks5 = false) {
     try {
         if (!enabled) {
@@ -166,7 +200,7 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
                 value: { mode: "direct" },
                 scope: "regular"
             });
-            chrome.runtime.sendMessage({ 
+            await safeSendMessage({ 
                 type: 'proxyStatus', 
                 ip: 'Direct Connection',
                 matched: null
@@ -242,7 +276,7 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
 
             const healthCheck = await checkProxyHealth(details, useSocks5);
             if (healthCheck.ip) {
-                chrome.runtime.sendMessage({ 
+                await safeSendMessage({ 
                     type: 'proxyStatus', 
                     ip: healthCheck.ip,
                     matched: healthCheck.matched
@@ -255,7 +289,7 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
         }
     } catch (error) {
         console.error('Proxy setup failed:', error);
-        chrome.runtime.sendMessage({ 
+        await safeSendMessage({ 
             type: 'proxyError', 
             message: error.message 
         });

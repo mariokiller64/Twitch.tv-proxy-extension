@@ -5,7 +5,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function loadSettings() {
     chrome.storage.sync.get(
-        ["proxyDetails", "proxyHistory", "proxyEnabled", "preferHttps", "useSocks5", "lastHealthCheck", "lastKnownIP"], 
+        [
+            "proxyDetails", 
+            "proxyHistory", 
+            "proxyEnabled", 
+            "preferHttps", 
+            "useSocks5", 
+            "lastHealthCheck", 
+            "lastKnownIP",
+            "lastProxyStatus",
+            "lastProxyError"
+        ], 
         (data) => {
             document.getElementById("proxy-input").value = data.proxyDetails || '';
             document.getElementById("enable-proxy").checked = !!data.proxyEnabled;
@@ -14,8 +24,28 @@ function loadSettings() {
             document.getElementById("use-socks5").checked = !!data.useSocks5;
             displayHistory(data.proxyHistory || []);
             updateInputPlaceholder();
-            if (data.lastHealthCheck && data.lastKnownIP) {
+            
+            // Handle stored status messages
+            if (data.lastProxyStatus) {
+                const timeSinceStatus = Date.now() - data.lastProxyStatus.timestamp;
+                if (timeSinceStatus < 30000) { // Show if less than 30 seconds old
+                    const statusMsg = data.lastProxyStatus.matched === true ? 
+                        `Proxy Status\nIP: ${data.lastProxyStatus.ip}\nStatus: Verified` :
+                        data.lastProxyStatus.matched === false ?
+                        `Proxy Status\nIP: ${data.lastProxyStatus.ip}\nStatus: Warning - IP Mismatch` :
+                        `Proxy Status\nIP: ${data.lastProxyStatus.ip}\nStatus: Active`;
+                    
+                    showStatus(statusMsg, data.lastProxyStatus.matched === false ? 'warning' : 'success', 15000);
+                }
+            } else if (data.lastHealthCheck && data.lastKnownIP) {
                 updateProxyStatus(data.lastHealthCheck, data.lastKnownIP);
+            }
+            
+            if (data.lastProxyError) {
+                const timeSinceError = Date.now() - data.lastProxyError.timestamp;
+                if (timeSinceError < 30000) { // Show if less than 30 seconds old
+                    showStatus(data.lastProxyError.message, 'error', 10000);
+                }
             }
         }
     );
@@ -62,8 +92,8 @@ async function runSpeedTest() {
         chrome.storage.sync.get("proxyEnabled", async (data) => {
             const proxyStatus = data.proxyEnabled ? "Proxy Enabled" : "Direct Connection";
             
-            // Test Twitch connection
-            const response = await fetch('https://api.twitch.tv/helix', {
+            // Just measure latency to a reliable endpoint instead of Twitch
+            const latencyResponse = await fetch('https://api.ipify.org/check', {
                 method: 'HEAD'
             });
             const endTime = Date.now();
@@ -76,7 +106,8 @@ async function runSpeedTest() {
             );
         });
     } catch (error) {
-        showStatus('Speed test failed - Check connection', 'error', 15000);
+        console.error('Speed test error:', error);
+        showStatus(`Speed test failed - ${error.message}`, 'error', 15000);
     }
 }
 
@@ -142,7 +173,9 @@ document.getElementById("clear-button").addEventListener("click", () => {
     chrome.storage.sync.set({ 
         proxyDetails: null,
         proxyEnabled: false,
-        lastKnownIP: null
+        lastKnownIP: null,
+        lastProxyStatus: null,  // Clear stored status
+        lastProxyError: null    // Clear stored errors
     });
     document.getElementById("proxy-input").value = '';
     document.getElementById("enable-proxy").checked = false;
