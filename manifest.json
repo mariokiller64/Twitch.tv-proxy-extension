@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "manifest_version": 3,
+  "name": "Proxy Settings",
+  "permissions": [
+    "proxy",
+    "webRequest",
+    "webRequestAuthProvider",
+    "storage",
+    "privacy"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
