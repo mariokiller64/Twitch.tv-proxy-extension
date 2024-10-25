@@ -55,12 +55,20 @@
 </head>
 <body>
     <div id="status-indicator"></div>
-    <input type="text" id="proxy-input" placeholder="IP:PORT:USERNAME:PASSWORD">
+    <input type="text" id="proxy-input" placeholder="IP:PORT or IP:PORT:USERNAME:PASSWORD">
     <div class="controls">
-        <input type="checkbox" id="enable-proxy">
-        <label for="enable-proxy">Enable Proxy</label>
-        <input type="checkbox" id="prefer-https" checked>
-        <label for="prefer-https">Prefer HTTPS</label>
+        <div>
+            <input type="checkbox" id="enable-proxy">
+            <label for="enable-proxy">Enable Proxy</label>
+        </div>
+        <div>
+            <input type="checkbox" id="prefer-https" checked>
+            <label for="prefer-https">Prefer HTTPS</label>
+        </div>
+        <div>
+            <input type="checkbox" id="use-socks5">
+            <label for="use-socks5">Use SOCKS5 (NO AUTHENTICATION)</label>
+        </div>
     </div>
     <button id="apply-button">Apply</button>
     <button id="clear-button">Clear</button>

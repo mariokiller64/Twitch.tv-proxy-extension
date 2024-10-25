@@ -4,13 +4,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function loadSettings() {
     chrome.storage.sync.get(
-        ["proxyDetails", "proxyHistory", "proxyEnabled", "preferHttps"], 
+        ["proxyDetails", "proxyHistory", "proxyEnabled", "preferHttps", "useSocks5"], 
         (data) => {
             document.getElementById("proxy-input").value = data.proxyDetails || '';
             document.getElementById("enable-proxy").checked = !!data.proxyEnabled;
             document.getElementById("prefer-https").checked = 
                 data.preferHttps !== undefined ? data.preferHttps : true;
+            document.getElementById("use-socks5").checked = !!data.useSocks5;
             displayHistory(data.proxyHistory || []);
+            updateInputPlaceholder();
         }
     );
 }
@@ -23,23 +25,53 @@ document.getElementById("prefer-https").addEventListener("change", (e) => {
     chrome.storage.sync.set({ preferHttps: e.target.checked });
 });
 
+document.getElementById("use-socks5").addEventListener("change", (e) => {
+    chrome.storage.sync.set({ useSocks5: e.target.checked });
+    updateInputPlaceholder();
+});
+
+function updateInputPlaceholder() {
+    const proxyInput = document.getElementById("proxy-input");
+    const useSocks5 = document.getElementById("use-socks5").checked;
+    
+    if (useSocks5) {
+        proxyInput.placeholder = "IP:PORT (SOCKS5)";
+    } else {
+        proxyInput.placeholder = "IP:PORT or IP:PORT:USERNAME:PASSWORD";
+    }
+}
+
 document.getElementById("apply-button").addEventListener("click", () => {
     const proxyInput = document.getElementById("proxy-input").value;
     const enableProxy = document.getElementById("enable-proxy");
     const preferHttps = document.getElementById("prefer-https").checked;
+    const useSocks5 = document.getElementById("use-socks5").checked;
     
     if (proxyInput) {
+        const parts = proxyInput.split(':');
+        
+        if (useSocks5 && parts.length !== 2) {
+            showStatus('SOCKS5 proxy must be in IP:PORT format only', 'error');
+            return;
+        }
+        
+        if (!useSocks5 && parts.length !== 2 && parts.length !== 4) {
+            showStatus('Proxy must be in IP:PORT or IP:PORT:USERNAME:PASSWORD format', 'error');
+            return;
+        }
+
         chrome.storage.sync.set({ 
             proxyDetails: proxyInput,
             proxyEnabled: true,
-            preferHttps: preferHttps
+            preferHttps: preferHttps,
+            useSocks5: useSocks5
         }, () => {
             enableProxy.checked = true;
             addProxyToHistory(proxyInput);
             showStatus('Proxy settings applied successfully', 'success');
         });
     } else {
-        showStatus('Please enter proxy details in IP:PORT:USERNAME:PASSWORD format', 'error');
+        showStatus('Please enter proxy details', 'error');
     }
 });
 
@@ -108,7 +140,6 @@ function showStatus(message, type) {
     }
 }
 
-// Listen for errors from background script
 chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'proxyError') {
         showStatus(message.message, 'error');

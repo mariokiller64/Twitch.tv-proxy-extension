@@ -2,14 +2,19 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.sync.set({ 
         proxyDetails: null,
         proxyEnabled: false,
-        preferHttps: true
+        preferHttps: true,
+        useSocks5: false
     });
 });
 
-function validateProxyFormat(details) {
+function validateProxyFormat(details, isSocks5) {
     if (!details) return false;
     const parts = details.split(':');
-    if (parts.length < 2 || parts.length > 4) return false;
+    
+    // SOCKS5 only accepts IP:PORT format
+    if (isSocks5 && parts.length !== 2) return false;
+    // HTTP/HTTPS accepts either IP:PORT or IP:PORT:USERNAME:PASSWORD
+    if (!isSocks5 && parts.length !== 2 && parts.length !== 4) return false;
     
     const [host, port] = parts;
     // Validate IP address/hostname format
@@ -23,27 +28,26 @@ function validateProxyFormat(details) {
     return true;
 }
 
-// List of Twitch-related domains
 const twitchDomains = [
     "*://*.twitch.tv/*",
-    "*://*.ttvnw.net/*",        // Twitch CDN
-    "*://*.jtvnw.net/*",        // Justin.tv/Twitch legacy CDN
-    "*://twitchcdn.net/*",      // Additional Twitch CDN
+    "*://*.ttvnw.net/*",
+    "*://*.jtvnw.net/*",
+    "*://twitchcdn.net/*",
     "*://*.twitchcdn.net/*",
-    "*://twitch.map.fastly.net/*", // Fastly CDN used by Twitch
-    "*://api.twitch.tv/*",      // Twitch API
-    "*://gql.twitch.tv/*",      // Twitch GraphQL API
-    "*://clips.twitch.tv/*",    // Twitch Clips
-    "*://vod.twitch.tv/*",      // Twitch VODs
-    "*://usher.ttvnw.net/*",    // Stream routing
-    "*://video-edge*.jtvnw.net/*", // Video Edge servers
-    "*://static.twitchcdn.net/*",  // Static content
-    "*://static-cdn.jtvnw.net/*",  // Static CDN
-    "*://video-weaver.*.hls.ttvnw.net/*", // HLS video servers
-    "*://video-edge.*.abs.hls.ttvnw.net/*" // Alternative HLS servers
+    "*://twitch.map.fastly.net/*",
+    "*://api.twitch.tv/*",
+    "*://gql.twitch.tv/*",
+    "*://clips.twitch.tv/*",
+    "*://vod.twitch.tv/*",
+    "*://usher.ttvnw.net/*",
+    "*://video-edge.jtvnw.net/*",
+    "*://static.twitchcdn.net/*",
+    "*://static-cdn.jtvnw.net/*",
+    "*://video-weaver.hls.ttvnw.net/*",
+    "*://video-edge.abs.hls.ttvnw.net/*"
 ];
 
-async function setProxy(details, enabled, preferHttps = true) {
+async function setProxy(details, enabled, preferHttps = true, useSocks5 = false) {
     try {
         if (!enabled) {
             await chrome.proxy.settings.set({
@@ -53,54 +57,80 @@ async function setProxy(details, enabled, preferHttps = true) {
             return;
         }
 
-        if (details && validateProxyFormat(details)) {
-            const [host, port, username, password] = details.split(':');
+        if (details && validateProxyFormat(details, useSocks5)) {
+            const parts = details.split(':');
+            const [host, port] = parts;
+            const username = parts[2];
+            const password = parts[3];
 
-            // Configure proxy settings with Twitch-specific rules
-            const proxyConfig = {
-                value: {
-                    mode: "pac_script",
-                    pacScript: {
-                        data: `
-                            function FindProxyForURL(url, host) {
-                                // Twitch domains to proxy
-                                const twitchDomains = [
-                                    "twitch.tv",
-                                    ".twitch.tv",
-                                    ".ttvnw.net",
-                                    ".jtvnw.net",
-                                    "twitchcdn.net",
-                                    ".twitchcdn.net",
-                                    "twitch.map.fastly.net",
-                                    "static-cdn.jtvnw.net"
-                                ];
+            if (useSocks5) {
+                // SOCKS5 configuration
+                const proxyConfig = {
+                    value: {
+                        mode: "fixed_servers",
+                        rules: {
+                            singleProxy: {
+                                scheme: "socks5",
+                                host: host,
+                                port: parseInt(port)
+                            },
+                            bypassList: ["localhost", "127.0.0.1"]
+                        }
+                    },
+                    scope: "regular"
+                };
+                await chrome.proxy.settings.set(proxyConfig);
+                // Remove auth listener for SOCKS5
+                chrome.webRequest.onAuthRequired.removeListener(handleAuth);
+            } else {
+                // HTTP/HTTPS configuration
+                const proxyConfig = {
+                    value: {
+                        mode: "pac_script",
+                        pacScript: {
+                            data: `
+                                function FindProxyForURL(url, host) {
+                                    // Twitch domains to proxy
+                                    const twitchDomains = [
+                                        "twitch.tv",
+                                        ".twitch.tv",
+                                        ".ttvnw.net",
+                                        ".jtvnw.net",
+                                        "twitchcdn.net",
+                                        ".twitchcdn.net",
+                                        "twitch.map.fastly.net",
+                                        "static-cdn.jtvnw.net"
+                                    ];
 
-                                // Check if the host matches any Twitch domain
-                                for (let domain of twitchDomains) {
-                                    if (host.endsWith(domain)) {
-                                        return "PROXY ${host}:${port}";
+                                    // Check if the host matches any Twitch domain
+                                    for (let domain of twitchDomains) {
+                                        if (host.endsWith(domain)) {
+                                            return "PROXY ${host}:${port}";
+                                        }
                                     }
+
+                                    // Direct connection for all other traffic
+                                    return "DIRECT";
                                 }
+                            `
+                        }
+                    },
+                    scope: "regular"
+                };
 
-                                // Direct connection for all other traffic
-                                return "DIRECT";
-                            }
-                        `
-                    }
-                },
-                scope: "regular"
-            };
+                await chrome.proxy.settings.set(proxyConfig);
 
-            await chrome.proxy.settings.set(proxyConfig);
-
-            // Set up authentication if credentials are provided
-            if (username && password) {
-                chrome.webRequest.onAuthRequired.removeListener(handleAuth); // Remove existing listener
-                chrome.webRequest.onAuthRequired.addListener(
-                    handleAuth,
-                    { urls: twitchDomains },
-                    ['asyncBlocking']
-                );
+                // Set up authentication only if credentials are provided - KEEPING YOUR ORIGINAL WORKING CODE
+                if (username && password) {
+                    chrome.webRequest.onAuthRequired.removeListener(handleAuth);
+                    chrome.webRequest.onAuthRequired.addListener(
+                        handleAuth,
+                        { urls: twitchDomains },
+                        ['asyncBlocking']
+                    );
+                } else {
+                    chrome.webRequest.onAuthRequired.removeListener(handleAuth);
+                }
             }
         }
     } catch (error) {
@@ -112,6 +142,7 @@ async function setProxy(details, enabled, preferHttps = true) {
     }
 }
 
+// Keeping your original handleAuth function intact
 function handleAuth(details, callbackFn) {
     chrome.storage.sync.get("proxyDetails", (data) => {
         if (data.proxyDetails) {
@@ -124,14 +155,15 @@ function handleAuth(details, callbackFn) {
 }
 
 chrome.storage.onChanged.addListener((changes, namespace) => {
-    if (changes.proxyDetails || changes.proxyEnabled || changes.preferHttps) {
+    if (changes.proxyDetails || changes.proxyEnabled || changes.preferHttps || changes.useSocks5) {
         chrome.storage.sync.get(
-            ["proxyDetails", "proxyEnabled", "preferHttps"], 
+            ["proxyDetails", "proxyEnabled", "preferHttps", "useSocks5"], 
             (data) => {
                 setProxy(
                     data.proxyDetails, 
                     data.proxyEnabled, 
-                    data.preferHttps
+                    data.preferHttps,
+                    data.useSocks5
                 );
             }
         );
