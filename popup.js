@@ -1,10 +1,11 @@
 document.addEventListener("DOMContentLoaded", () => {
     loadSettings();
+    initializeSpeedTest();
 });
 
 function loadSettings() {
     chrome.storage.sync.get(
-        ["proxyDetails", "proxyHistory", "proxyEnabled", "preferHttps", "useSocks5"], 
+        ["proxyDetails", "proxyHistory", "proxyEnabled", "preferHttps", "useSocks5", "lastHealthCheck"], 
         (data) => {
             document.getElementById("proxy-input").value = data.proxyDetails || '';
             document.getElementById("enable-proxy").checked = !!data.proxyEnabled;
@@ -13,8 +14,54 @@ function loadSettings() {
             document.getElementById("use-socks5").checked = !!data.useSocks5;
             displayHistory(data.proxyHistory || []);
             updateInputPlaceholder();
+            if (data.lastHealthCheck) {
+                updateProxyStatus(data.lastHealthCheck);
+            }
         }
     );
+}
+
+function updateProxyStatus(lastHealthCheck) {
+    const statusEl = document.getElementById("status-indicator");
+    if (!statusEl) return;
+
+    if (!lastHealthCheck) {
+        statusEl.textContent = "Status: Unknown";
+        statusEl.className = "status-unknown";
+        return;
+    }
+
+    const timeSinceCheck = Date.now() - lastHealthCheck;
+    if (timeSinceCheck < 300000) { // 5 minutes
+        statusEl.textContent = "Status: Connected";
+        statusEl.className = "status-connected";
+    } else {
+        statusEl.textContent = "Status: Check Required";
+        statusEl.className = "status-warning";
+    }
+}
+
+function initializeSpeedTest() {
+    const speedTestBtn = document.createElement("button");
+    speedTestBtn.id = "speed-test";
+    speedTestBtn.textContent = "Test Speed";
+    speedTestBtn.addEventListener("click", runSpeedTest);
+    document.querySelector(".button-group").appendChild(speedTestBtn);
+}
+
+async function runSpeedTest() {
+    const startTime = Date.now();
+    try {
+        const response = await fetch('https://api.twitch.tv/helix', {
+            method: 'HEAD'
+        });
+        const endTime = Date.now();
+        const latency = endTime - startTime;
+        
+        showStatus(`Latency: ${latency}ms`, latency < 200 ? 'success' : 'warning');
+    } catch (error) {
+        showStatus('Speed test failed', 'error');
+    }
 }
 
 document.getElementById("enable-proxy").addEventListener("change", (e) => {
@@ -98,9 +145,10 @@ function addProxyToHistory(proxyEntry) {
         if (!history.includes(proxyEntry)) {
             history.unshift(proxyEntry);
             if (history.length > 10) history.pop();
-            chrome.storage.sync.set({ proxyHistory: history });
+            chrome.storage.sync.set({ proxyHistory: history }, () => {
+                displayHistory(history);
+            });
         }
-        displayHistory(history);
     });
 }
 
