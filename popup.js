@@ -5,7 +5,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 function loadSettings() {
     chrome.storage.sync.get(
-        ["proxyDetails", "proxyHistory", "proxyEnabled", "preferHttps", "useSocks5", "lastHealthCheck"], 
+        ["proxyDetails", "proxyHistory", "proxyEnabled", "preferHttps", "useSocks5", "lastHealthCheck", "lastKnownIP"], 
         (data) => {
             document.getElementById("proxy-input").value = data.proxyDetails || '';
             document.getElementById("enable-proxy").checked = !!data.proxyEnabled;
@@ -14,26 +14,26 @@ function loadSettings() {
             document.getElementById("use-socks5").checked = !!data.useSocks5;
             displayHistory(data.proxyHistory || []);
             updateInputPlaceholder();
-            if (data.lastHealthCheck) {
-                updateProxyStatus(data.lastHealthCheck);
+            if (data.lastHealthCheck && data.lastKnownIP) {
+                updateProxyStatus(data.lastHealthCheck, data.lastKnownIP);
             }
         }
     );
 }
 
-function updateProxyStatus(lastHealthCheck) {
+function updateProxyStatus(lastHealthCheck, lastKnownIP) {
     const statusEl = document.getElementById("status-indicator");
     if (!statusEl) return;
 
-    if (!lastHealthCheck) {
-        statusEl.textContent = "Status: Unknown";
+    if (!lastHealthCheck || !lastKnownIP) {
+        statusEl.textContent = "Status: No Proxy Active";
         statusEl.className = "status-unknown";
         return;
     }
 
     const timeSinceCheck = Date.now() - lastHealthCheck;
-    if (timeSinceCheck < 300000) { // 5 minutes
-        statusEl.textContent = "Status: Connected";
+    if (timeSinceCheck < 300000) {
+        statusEl.textContent = `Connected - IP: ${lastKnownIP}`;
         statusEl.className = "status-connected";
     } else {
         statusEl.textContent = "Status: Check Required";
@@ -45,6 +45,7 @@ function initializeSpeedTest() {
     const speedTestBtn = document.createElement("button");
     speedTestBtn.id = "speed-test";
     speedTestBtn.textContent = "Test Speed";
+    speedTestBtn.className = "speed-test-button";
     speedTestBtn.addEventListener("click", runSpeedTest);
     document.querySelector(".button-group").appendChild(speedTestBtn);
 }
@@ -52,15 +53,30 @@ function initializeSpeedTest() {
 async function runSpeedTest() {
     const startTime = Date.now();
     try {
-        const response = await fetch('https://api.twitch.tv/helix', {
-            method: 'HEAD'
-        });
-        const endTime = Date.now();
-        const latency = endTime - startTime;
+        // Get current IP
+        const ipResponse = await fetch('https://api.ipify.org?format=json');
+        if (!ipResponse.ok) throw new Error('Failed to get IP');
+        const ipData = await ipResponse.json();
         
-        showStatus(`Latency: ${latency}ms`, latency < 200 ? 'success' : 'warning');
+        // Get proxy status
+        chrome.storage.sync.get("proxyEnabled", async (data) => {
+            const proxyStatus = data.proxyEnabled ? "Proxy Enabled" : "Direct Connection";
+            
+            // Test Twitch connection
+            const response = await fetch('https://api.twitch.tv/helix', {
+                method: 'HEAD'
+            });
+            const endTime = Date.now();
+            const latency = endTime - startTime;
+            
+            showStatus(
+                `Speed Test Results\nConnection: ${proxyStatus}\nIP: ${ipData.ip}\nLatency: ${latency}ms`, 
+                latency < 200 ? 'success' : 'warning',
+                15000
+            );
+        });
     } catch (error) {
-        showStatus('Speed test failed', 'error');
+        showStatus('Speed test failed - Check connection', 'error', 15000);
     }
 }
 
@@ -98,12 +114,12 @@ document.getElementById("apply-button").addEventListener("click", () => {
         const parts = proxyInput.split(':');
         
         if (useSocks5 && parts.length !== 2) {
-            showStatus('SOCKS5 proxy must be in IP:PORT format only', 'error');
+            showStatus('SOCKS5 proxy must be in IP:PORT format only', 'error', 5000);
             return;
         }
         
         if (!useSocks5 && parts.length !== 2 && parts.length !== 4) {
-            showStatus('Proxy must be in IP:PORT or IP:PORT:USERNAME:PASSWORD format', 'error');
+            showStatus('Proxy must be in IP:PORT or IP:PORT:USERNAME:PASSWORD format', 'error', 5000);
             return;
         }
 
@@ -115,27 +131,28 @@ document.getElementById("apply-button").addEventListener("click", () => {
         }, () => {
             enableProxy.checked = true;
             addProxyToHistory(proxyInput);
-            showStatus('Proxy settings applied successfully', 'success');
+            showStatus('Proxy settings applied - waiting for connection check...', 'success', 5000);
         });
     } else {
-        showStatus('Please enter proxy details', 'error');
+        showStatus('Please enter proxy details', 'error', 5000);
     }
 });
 
 document.getElementById("clear-button").addEventListener("click", () => {
     chrome.storage.sync.set({ 
         proxyDetails: null,
-        proxyEnabled: false
+        proxyEnabled: false,
+        lastKnownIP: null
     });
     document.getElementById("proxy-input").value = '';
     document.getElementById("enable-proxy").checked = false;
-    showStatus('Proxy settings cleared', 'success');
+    showStatus('Proxy settings cleared', 'success', 5000);
 });
 
 document.getElementById("clear-history-button").addEventListener("click", () => {
     chrome.storage.sync.set({ proxyHistory: [] }, () => {
         displayHistory([]);
-        showStatus('History cleared', 'success');
+        showStatus('History cleared', 'success', 5000);
     });
 });
 
@@ -168,28 +185,33 @@ function displayHistory(history) {
                 proxyEnabled: true
             });
             document.getElementById("enable-proxy").checked = true;
-            showStatus('Proxy settings applied from history', 'success');
+            showStatus('Proxy settings applied from history - waiting for connection check...', 'success', 5000);
         });
         
         historyList.appendChild(item);
     });
 }
 
-function showStatus(message, type) {
+function showStatus(message, type, duration = 5000) {
     const statusIndicator = document.getElementById("status-indicator");
     if (statusIndicator) {
-        statusIndicator.textContent = message;
+        statusIndicator.innerHTML = message.replace(/\n/g, '<br>');
         statusIndicator.className = type;
         statusIndicator.style.display = "block";
-        
-        setTimeout(() => {
-            statusIndicator.style.display = "none";
-        }, 3000);
     }
 }
 
 chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'proxyError') {
-        showStatus(message.message, 'error');
+        showStatus(message.message, 'error', 10000);
+    }
+    if (message.type === 'proxyStatus') {
+        const statusMsg = message.matched === true ? 
+            `Proxy Status\nIP: ${message.ip}\nStatus: Verified` :
+            message.matched === false ?
+            `Proxy Status\nIP: ${message.ip}\nStatus: Warning - IP Mismatch` :
+            `Proxy Status\nIP: ${message.ip}\nStatus: Active`;
+        
+        showStatus(statusMsg, message.matched === false ? 'warning' : 'success', 15000);
     }
 });

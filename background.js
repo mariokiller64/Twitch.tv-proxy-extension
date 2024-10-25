@@ -5,15 +5,15 @@ chrome.runtime.onInstalled.addListener(() => {
         preferHttps: true,
         useSocks5: false,
         lastHealthCheck: null,
-        proxyTimeout: 10000, // 10 seconds timeout
+        lastKnownIP: null,
+        proxyTimeout: 10000,
         maxRetries: 3,
-        rateLimit: 100 // requests per minute
+        rateLimit: 100
     });
 });
 
-// Request counters for rate limiting
 let requestCounts = {};
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const RATE_LIMIT_WINDOW = 60000;
 
 function validateProxyFormat(details, isSocks5) {
     if (!details) return false;
@@ -48,43 +48,109 @@ const twitchDomains = [
     "*://static.twitchcdn.net/*",
     "*://static-cdn.jtvnw.net/*",
     "*://video-weaver.hls.ttvnw.net/*",
-    "*://video-edge.abs.hls.ttvnw.net/*"
+    "*://video-edge.abs.hls.ttvnw.net/*",
+    "*://api.ipify.org/*"
 ];
 
-// Simplified health check that just verifies proxy connection
 async function checkProxyHealth(proxyDetails, useSocks5) {
-    // Skip health check if proxy is being disabled
-    if (!proxyDetails) return true;
+    if (!proxyDetails) return { success: true, ip: null };
 
     try {
-        // Set up temporary proxy config for health check
-        const parts = proxyDetails.split(':');
-        const [host, port] = parts;
+        // Allow proxy to fully initialize
+        await new Promise(resolve => setTimeout(resolve, 3000));
         
-        // Test connection to Twitch API
-        const timestamp = Date.now();
-        chrome.storage.sync.set({ lastHealthCheck: timestamp });
+        try {
+            const response = await fetch('https://api.ipify.org?format=json', {
+                method: 'GET',
+                timeout: 10000
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                const timestamp = Date.now();
+                chrome.storage.sync.set({ 
+                    lastHealthCheck: timestamp,
+                    lastKnownIP: data.ip 
+                });
+                
+                const proxyHost = proxyDetails.split(':')[0];
+                const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+                if (ipRegex.test(proxyHost)) {
+                    const isProxyIP = (data.ip === proxyHost);
+                    return { 
+                        success: true, 
+                        ip: data.ip,
+                        matched: isProxyIP
+                    };
+                }
+                
+                return { 
+                    success: true, 
+                    ip: data.ip,
+                    matched: null
+                };
+            }
+        } catch (ipError) {
+            console.warn('IP verification failed:', ipError);
+            
+            try {
+                const altResponse = await fetch('https://ifconfig.me/ip', {
+                    method: 'GET',
+                    timeout: 10000
+                });
+                
+                if (altResponse.ok) {
+                    const ip = await altResponse.text();
+                    const timestamp = Date.now();
+                    chrome.storage.sync.set({ 
+                        lastHealthCheck: timestamp,
+                        lastKnownIP: ip.trim() 
+                    });
+                    
+                    const proxyHost = proxyDetails.split(':')[0];
+                    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+                    if (ipRegex.test(proxyHost)) {
+                        const isProxyIP = (ip.trim() === proxyHost);
+                        return { 
+                            success: true, 
+                            ip: ip.trim(),
+                            matched: isProxyIP
+                        };
+                    }
+                    
+                    return { 
+                        success: true, 
+                        ip: ip.trim(),
+                        matched: null
+                    };
+                }
+            } catch (altIpError) {
+                console.warn('Alternative IP verification failed:', altIpError);
+            }
+        }
         
-        return true; // If we get here, proxy is working
+        throw new Error('Failed to verify proxy IP');
     } catch (error) {
         console.error('Health check error:', error);
-        return true; // Return true to allow proxy setup to continue
+        return { 
+            success: false, 
+            ip: null, 
+            matched: null,
+            error: error.message 
+        };
     }
 }
 
-// Rate limiting function
 function checkRateLimit(domain) {
     const now = Date.now();
     if (!requestCounts[domain]) {
         requestCounts[domain] = [];
     }
     
-    // Clean old requests
     requestCounts[domain] = requestCounts[domain].filter(time => 
         now - time < RATE_LIMIT_WINDOW
     );
     
-    // Check rate limit
     if (requestCounts[domain].length >= 100) {
         return false;
     }
@@ -100,6 +166,11 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
                 value: { mode: "direct" },
                 scope: "regular"
             });
+            chrome.runtime.sendMessage({ 
+                type: 'proxyStatus', 
+                ip: 'Direct Connection',
+                matched: null
+            });
             return;
         }
 
@@ -109,7 +180,6 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
             const username = parts[2];
             const password = parts[3];
 
-            // Always proceed with proxy setup
             if (useSocks5) {
                 const proxyConfig = {
                     value: {
@@ -130,30 +200,19 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
             } else {
                 const proxyConfig = {
                     value: {
-                        mode: "pac_script",
-                        pacScript: {
-                            data: `
-                                function FindProxyForURL(url, host) {
-                                    const twitchDomains = [
-                                        "twitch.tv",
-                                        ".twitch.tv",
-                                        ".ttvnw.net",
-                                        ".jtvnw.net",
-                                        "twitchcdn.net",
-                                        ".twitchcdn.net",
-                                        "twitch.map.fastly.net",
-                                        "static-cdn.jtvnw.net"
-                                    ];
-
-                                    for (let domain of twitchDomains) {
-                                        if (host.endsWith(domain)) {
-                                            return "PROXY ${host}:${port}";
-                                        }
-                                    }
-
-                                    return "DIRECT";
-                                }
-                            `
+                        mode: "fixed_servers",
+                        rules: {
+                            proxyForHttp: {
+                                scheme: "http",
+                                host: host,
+                                port: parseInt(port)
+                            },
+                            proxyForHttps: {
+                                scheme: "http",
+                                host: host,
+                                port: parseInt(port)
+                            },
+                            bypassList: ["localhost", "127.0.0.1"]
                         }
                     },
                     scope: "regular"
@@ -173,16 +232,25 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
                 }
             }
 
-            // Set up retry logic for failed requests
             chrome.webRequest.onErrorOccurred.addListener(
                 handleRequestError,
                 { urls: twitchDomains }
             );
 
-            // Perform health check after setup
-            const isHealthy = await checkProxyHealth(details, useSocks5);
-            if (!isHealthy) {
-                console.warn('Proxy health check warning, but continuing with setup');
+            // Explicitly wait for proxy to be ready
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            const healthCheck = await checkProxyHealth(details, useSocks5);
+            if (healthCheck.ip) {
+                chrome.runtime.sendMessage({ 
+                    type: 'proxyStatus', 
+                    ip: healthCheck.ip,
+                    matched: healthCheck.matched
+                });
+            }
+            
+            if (!healthCheck.success) {
+                throw new Error('Proxy connection failed');
             }
         }
     } catch (error) {
