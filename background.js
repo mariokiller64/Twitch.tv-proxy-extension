@@ -155,24 +155,6 @@ async function checkProxyHealth(proxyDetails, useSocks5) {
     }
 }
 
-function checkRateLimit(domain) {
-    const now = Date.now();
-    if (!requestCounts[domain]) {
-        requestCounts[domain] = [];
-    }
-    
-    requestCounts[domain] = requestCounts[domain].filter(time => 
-        now - time < RATE_LIMIT_WINDOW
-    );
-    
-    if (requestCounts[domain].length >= 100) {
-        return false;
-    }
-    
-    requestCounts[domain].push(now);
-    return true;
-}
-
 async function safeSendMessage(message) {
     try {
         const receivers = await chrome.runtime.getContexts({
