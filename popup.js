@@ -35,7 +35,7 @@ function loadSettings() {
                         `Proxy Status\nIP: ${data.lastProxyStatus.ip}\nStatus: Warning - IP Mismatch` :
                         `Proxy Status\nIP: ${data.lastProxyStatus.ip}\nStatus: Active`;
                     
-                    showStatus(statusMsg, data.lastProxyStatus.matched === false ? 'warning' : 'success', 15000);
+                    showStatus(statusMsg, data.lastProxyStatus.matched === false ? 'warning' : 'success', 1500);
                 }
             } else if (data.lastHealthCheck && data.lastKnownIP) {
                 updateProxyStatus(data.lastHealthCheck, data.lastKnownIP);
@@ -44,7 +44,7 @@ function loadSettings() {
             if (data.lastProxyError) {
                 const timeSinceError = Date.now() - data.lastProxyError.timestamp;
                 if (timeSinceError < 30000) { // Show if less than 30 seconds old
-                    showStatus(data.lastProxyError.message, 'error', 10000);
+                    showStatus(data.lastProxyError.message, 'error', 5000);
                 }
             }
         }
@@ -102,12 +102,12 @@ async function runSpeedTest() {
             showStatus(
                 `Speed Test Results\nConnection: ${proxyStatus}\nIP: ${ipData.ip}\nLatency: ${latency}ms`, 
                 latency < 200 ? 'success' : 'warning',
-                15000
+                1500
             );
         });
     } catch (error) {
         console.error('Speed test error:', error);
-        showStatus(`Speed test failed - ${error.message}`, 'error', 15000);
+        showStatus(`Speed test failed - ${error.message}`, 'error', 1500);
     }
 }
 
@@ -145,12 +145,12 @@ document.getElementById("apply-button").addEventListener("click", () => {
         const parts = proxyInput.split(':');
         
         if (useSocks5 && parts.length !== 2) {
-            showStatus('SOCKS5 proxy must be in IP:PORT format only', 'error', 5000);
+            showStatus('SOCKS5 proxy must be in IP:PORT format only', 'error', 500);
             return;
         }
         
         if (!useSocks5 && parts.length !== 2 && parts.length !== 4) {
-            showStatus('Proxy must be in IP:PORT or IP:PORT:USERNAME:PASSWORD format', 'error', 5000);
+            showStatus('Proxy must be in IP:PORT or IP:PORT:USERNAME:PASSWORD format', 'error', 500);
             return;
         }
 
@@ -162,10 +162,10 @@ document.getElementById("apply-button").addEventListener("click", () => {
         }, () => {
             enableProxy.checked = true;
             addProxyToHistory(proxyInput);
-            showStatus('Proxy settings applied - waiting for connection check...', 'success', 5000);
+            showStatus('Proxy settings applied - waiting for connection check...', 'success', 500);
         });
     } else {
-        showStatus('Please enter proxy details', 'error', 5000);
+        showStatus('Please enter proxy details', 'error', 500);
     }
 });
 
@@ -179,13 +179,13 @@ document.getElementById("clear-button").addEventListener("click", () => {
     });
     document.getElementById("proxy-input").value = '';
     document.getElementById("enable-proxy").checked = false;
-    showStatus('Proxy settings cleared', 'success', 5000);
+    showStatus('Proxy settings cleared', 'success', 500);
 });
 
 document.getElementById("clear-history-button").addEventListener("click", () => {
     chrome.storage.sync.set({ proxyHistory: [] }, () => {
         displayHistory([]);
-        showStatus('History cleared', 'success', 5000);
+        showStatus('History cleared', 'success', 500);
     });
 });
 
@@ -218,14 +218,14 @@ function displayHistory(history) {
                 proxyEnabled: true
             });
             document.getElementById("enable-proxy").checked = true;
-            showStatus('Proxy settings applied from history - waiting for connection check...', 'success', 5000);
+            showStatus('Proxy settings applied from history - waiting for connection check...', 'success', 500);
         });
         
         historyList.appendChild(item);
     });
 }
 
-function showStatus(message, type, duration = 5000) {
+function showStatus(message, type, duration = 500) {
     const statusIndicator = document.getElementById("status-indicator");
     if (statusIndicator) {
         statusIndicator.innerHTML = message.replace(/\n/g, '<br>');
@@ -236,7 +236,7 @@ function showStatus(message, type, duration = 5000) {
 
 chrome.runtime.onMessage.addListener((message) => {
     if (message.type === 'proxyError') {
-        showStatus(message.message, 'error', 10000);
+        showStatus(message.message, 'error', 500);
     }
     if (message.type === 'proxyStatus') {
         const statusMsg = message.matched === true ? 
@@ -245,6 +245,6 @@ chrome.runtime.onMessage.addListener((message) => {
             `Proxy Status\nIP: ${message.ip}\nStatus: Warning - IP Mismatch` :
             `Proxy Status\nIP: ${message.ip}\nStatus: Active`;
         
-        showStatus(statusMsg, message.matched === false ? 'warning' : 'success', 15000);
+        showStatus(statusMsg, message.matched === false ? 'warning' : 'success', 500);
     }
 });
