@@ -1,3 +1,5 @@
+// BACKGROUND.JS START
+
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.sync.set({ 
         proxyDetails: null,
@@ -52,17 +54,29 @@ const twitchDomains = [
     "*://api.ipify.org/*"
 ];
 
+// New function: Initial proxy configuration on startup
+async function initializeProxyOnStartup() {
+    const storageData = await chrome.storage.sync.get(['proxyDetails', 'proxyEnabled', 'preferHttps', 'useSocks5']);
+    if (storageData.proxyEnabled) {
+        setProxy(
+            storageData.proxyDetails, 
+            storageData.proxyEnabled, 
+            storageData.preferHttps, 
+            storageData.useSocks5
+        );
+    }
+}
+
 async function checkProxyHealth(proxyDetails, useSocks5) {
     if (!proxyDetails) return { success: true, ip: null };
 
     try {
-        // Allow proxy to fully initialize
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        await new Promise(resolve => setTimeout(resolve, 1500));
         
         try {
             const response = await fetch('https://api.ipify.org?format=json', {
                 method: 'GET',
-                timeout: 10000
+                timeout: 5000
             });
             
             if (response.ok) {
@@ -159,10 +173,8 @@ function checkRateLimit(domain) {
     return true;
 }
 
-// Helper function to safely send messages
 async function safeSendMessage(message) {
     try {
-        // Check if there are any receivers (popup) open
         const receivers = await chrome.runtime.getContexts({
             contextTypes: ['POPUP']
         });
@@ -170,7 +182,6 @@ async function safeSendMessage(message) {
         if (receivers && receivers.length > 0) {
             chrome.runtime.sendMessage(message);
         } else {
-            // Store the last status in storage for the popup to read when it opens
             if (message.type === 'proxyStatus') {
                 chrome.storage.sync.set({
                     lastProxyStatus: {
@@ -271,8 +282,7 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
                 { urls: twitchDomains }
             );
 
-            // Explicitly wait for proxy to be ready
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
             const healthCheck = await checkProxyHealth(details, useSocks5);
             if (healthCheck.ip) {
@@ -340,3 +350,10 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
         );
     }
 });
+
+// Run the new initialization function at startup
+chrome.runtime.onStartup.addListener(() => {
+    initializeProxyOnStartup();
+});
+
+// BACKGROUND.JS END
