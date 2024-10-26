@@ -25,17 +25,16 @@ function loadSettings() {
             displayHistory(data.proxyHistory || []);
             updateInputPlaceholder();
             
-            // Handle stored status messages
             if (data.lastProxyStatus) {
                 const timeSinceStatus = Date.now() - data.lastProxyStatus.timestamp;
-                if (timeSinceStatus < 30000) { // Show if less than 30 seconds old
+                if (timeSinceStatus < 30000) {
                     const statusMsg = data.lastProxyStatus.matched === true ? 
                         `Proxy Status\nIP: ${data.lastProxyStatus.ip}\nStatus: Verified` :
                         data.lastProxyStatus.matched === false ?
                         `Proxy Status\nIP: ${data.lastProxyStatus.ip}\nStatus: Warning - IP Mismatch` :
                         `Proxy Status\nIP: ${data.lastProxyStatus.ip}\nStatus: Active`;
                     
-                    showStatus(statusMsg, data.lastProxyStatus.matched === false ? 'warning' : 'success', 1500);
+                    showStatus(statusMsg, data.lastProxyStatus.matched === false ? 'warning' : 'success', 15000);
                 }
             } else if (data.lastHealthCheck && data.lastKnownIP) {
                 updateProxyStatus(data.lastHealthCheck, data.lastKnownIP);
@@ -43,8 +42,8 @@ function loadSettings() {
             
             if (data.lastProxyError) {
                 const timeSinceError = Date.now() - data.lastProxyError.timestamp;
-                if (timeSinceError < 30000) { // Show if less than 30 seconds old
-                    showStatus(data.lastProxyError.message, 'error', 5000);
+                if (timeSinceError < 30000) {
+                    showStatus(data.lastProxyError.message, 'error', 10000);
                 }
             }
         }
@@ -83,31 +82,27 @@ function initializeSpeedTest() {
 async function runSpeedTest() {
     const startTime = Date.now();
     try {
-        // Get current IP
-        const ipResponse = await fetch('https://api.ipify.org?format=json');
+        const ipResponse = await fetch('https://api.ipify.org?format=json', {
+            timeout: 5000
+        });
+        
         if (!ipResponse.ok) throw new Error('Failed to get IP');
         const ipData = await ipResponse.json();
         
-        // Get proxy status
+        const endTime = Date.now();
+        const latency = endTime - startTime;
+        
         chrome.storage.sync.get("proxyEnabled", async (data) => {
             const proxyStatus = data.proxyEnabled ? "Proxy Enabled" : "Direct Connection";
-            
-            // Just measure latency to a reliable endpoint instead of Twitch
-            const latencyResponse = await fetch('https://api.ipify.org/check', {
-                method: 'HEAD'
-            });
-            const endTime = Date.now();
-            const latency = endTime - startTime;
-            
             showStatus(
                 `Speed Test Results\nConnection: ${proxyStatus}\nIP: ${ipData.ip}\nLatency: ${latency}ms`, 
                 latency < 200 ? 'success' : 'warning',
-                1500
+                15000
             );
         });
     } catch (error) {
         console.error('Speed test error:', error);
-        showStatus(`Speed test failed - ${error.message}`, 'error', 1500);
+        showStatus(`Speed test failed - ${error.message}`, 'error', 15000);
     }
 }
 

@@ -1,5 +1,3 @@
-// BACKGROUND.JS START
-
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.sync.set({ 
         proxyDetails: null,
@@ -54,7 +52,6 @@ const twitchDomains = [
     "*://api.ipify.org/*"
 ];
 
-// New function: Initial proxy configuration on startup
 async function initializeProxyOnStartup() {
     const storageData = await chrome.storage.sync.get(['proxyDetails', 'proxyEnabled', 'preferHttps', 'useSocks5']);
     if (storageData.proxyEnabled) {
@@ -69,78 +66,39 @@ async function initializeProxyOnStartup() {
 
 async function checkProxyHealth(proxyDetails, useSocks5) {
     if (!proxyDetails) return { success: true, ip: null };
-
+    
     try {
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        // Removed artificial delay
+        const response = await fetch('https://api.ipify.org?format=json', {
+            method: 'GET',
+            timeout: 5000 // Reduced timeout
+        });
         
-        try {
-            const response = await fetch('https://api.ipify.org?format=json', {
-                method: 'GET',
-                timeout: 5000
+        if (response.ok) {
+            const data = await response.json();
+            const timestamp = Date.now();
+            
+            await chrome.storage.sync.set({ 
+                lastHealthCheck: timestamp,
+                lastKnownIP: data.ip 
             });
             
-            if (response.ok) {
-                const data = await response.json();
-                const timestamp = Date.now();
-                chrome.storage.sync.set({ 
-                    lastHealthCheck: timestamp,
-                    lastKnownIP: data.ip 
-                });
-                
-                const proxyHost = proxyDetails.split(':')[0];
-                const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-                if (ipRegex.test(proxyHost)) {
-                    const isProxyIP = (data.ip === proxyHost);
-                    return { 
-                        success: true, 
-                        ip: data.ip,
-                        matched: isProxyIP
-                    };
-                }
-                
+            const proxyHost = proxyDetails.split(':')[0];
+            const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+            if (ipRegex.test(proxyHost)) {
+                const isProxyIP = (data.ip === proxyHost);
                 return { 
                     success: true, 
                     ip: data.ip,
-                    matched: null
+                    matched: isProxyIP
                 };
             }
-        } catch (ipError) {
-            console.warn('IP verification failed:', ipError);
             
-            try {
-                const altResponse = await fetch('https://ifconfig.me/ip', {
-                    method: 'GET',
-                    timeout: 10000
-                });
-                
-                if (altResponse.ok) {
-                    const ip = await altResponse.text();
-                    const timestamp = Date.now();
-                    chrome.storage.sync.set({ 
-                        lastHealthCheck: timestamp,
-                        lastKnownIP: ip.trim() 
-                    });
-                    
-                    const proxyHost = proxyDetails.split(':')[0];
-                    const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-                    if (ipRegex.test(proxyHost)) {
-                        const isProxyIP = (ip.trim() === proxyHost);
-                        return { 
-                            success: true, 
-                            ip: ip.trim(),
-                            matched: isProxyIP
-                        };
-                    }
-                    
-                    return { 
-                        success: true, 
-                        ip: ip.trim(),
-                        matched: null
-                    };
-                }
-            } catch (altIpError) {
-                console.warn('Alternative IP verification failed:', altIpError);
-            }
+            return { 
+                success: true, 
+                ip: data.ip,
+                matched: null
+            };
         }
         
         throw new Error('Failed to verify proxy IP');
@@ -155,6 +113,24 @@ async function checkProxyHealth(proxyDetails, useSocks5) {
     }
 }
 
+function checkRateLimit(domain) {
+    const now = Date.now();
+    if (!requestCounts[domain]) {
+        requestCounts[domain] = [];
+    }
+    
+    requestCounts[domain] = requestCounts[domain].filter(time => 
+        now - time < RATE_LIMIT_WINDOW
+    );
+    
+    if (requestCounts[domain].length >= 100) {
+        return false;
+    }
+    
+    requestCounts[domain].push(now);
+    return true;
+}
+
 async function safeSendMessage(message) {
     try {
         const receivers = await chrome.runtime.getContexts({
@@ -163,26 +139,27 @@ async function safeSendMessage(message) {
         
         if (receivers && receivers.length > 0) {
             chrome.runtime.sendMessage(message);
-        } else {
-            if (message.type === 'proxyStatus') {
-                chrome.storage.sync.set({
-                    lastProxyStatus: {
-                        ip: message.ip,
-                        matched: message.matched,
-                        timestamp: Date.now()
-                    }
-                });
-            } else if (message.type === 'proxyError') {
-                chrome.storage.sync.set({
-                    lastProxyError: {
-                        message: message.message,
-                        timestamp: Date.now()
-                    }
-                });
-            }
+        }
+        
+        // Always store status updates regardless of receivers
+        if (message.type === 'proxyStatus') {
+            await chrome.storage.sync.set({
+                lastProxyStatus: {
+                    ip: message.ip,
+                    matched: message.matched,
+                    timestamp: Date.now()
+                }
+            });
+        } else if (message.type === 'proxyError') {
+            await chrome.storage.sync.set({
+                lastProxyError: {
+                    message: message.message,
+                    timestamp: Date.now()
+                }
+            });
         }
     } catch (error) {
-        console.log('Message sending skipped - no receivers');
+        console.log('Message sending error:', error);
     }
 }
 
@@ -207,6 +184,7 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
             const username = parts[2];
             const password = parts[3];
 
+            // Set proxy configuration first
             if (useSocks5) {
                 const proxyConfig = {
                     value: {
@@ -244,9 +222,8 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
                     },
                     scope: "regular"
                 };
-
                 await chrome.proxy.settings.set(proxyConfig);
-
+                
                 if (username && password) {
                     chrome.webRequest.onAuthRequired.removeListener(handleAuth);
                     chrome.webRequest.onAuthRequired.addListener(
@@ -264,9 +241,9 @@ async function setProxy(details, enabled, preferHttps = true, useSocks5 = false)
                 { urls: twitchDomains }
             );
 
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
+            // Immediate health check
             const healthCheck = await checkProxyHealth(details, useSocks5);
+            
             if (healthCheck.ip) {
                 await safeSendMessage({ 
                     type: 'proxyStatus', 
@@ -333,9 +310,6 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
     }
 });
 
-// Run the new initialization function at startup
 chrome.runtime.onStartup.addListener(() => {
     initializeProxyOnStartup();
 });
-
-// BACKGROUND.JS END
